@@ -32,10 +32,10 @@ int main() {
     const char* api_id_str = std::getenv("TELEGRAM_API_ID");
     const char* api_hash = std::getenv("TELEGRAM_API_HASH");
     const char* bot_token = std::getenv("TELEGRAM_BOT_TOKEN");
+    const char* download_path = std::getenv("TELEGRAM_DOWNLOAD_PATH");
 
-    if (!api_id_str || !api_hash || !bot_token) {
-        std::cerr << "Error: Debes establecer las variables de entorno:" << std::endl;
-        std::cerr << "TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN" << std::endl;
+    if (!api_id_str || !api_hash || !bot_token || !download_path) {
+        rzLog(RZ_LOG_ERROR, "Error: Debes establecer las variables de entorno: TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN, TELEGRAM_DOWNLOAD_PATH");
         return 1;
     }
 
@@ -45,7 +45,7 @@ int main() {
         
         bot = new TelegramBot();
         
-        if (!bot->initialize(api_id, bot_token, api_hash)) {
+        if (!bot->initialize(api_id, bot_token, api_hash, download_path)) {
             rzLog(RZ_LOG_ERROR, "Error al inicializar el bot");
             delete bot;
             return 1;
@@ -57,11 +57,11 @@ int main() {
         bot->run();  // Tu función run() original
 
         // Mantener el programa corriendo Y mostrar estado cada 5 segundos
-        int counter = 0;
+        //int counter = 0;
         while (true) {
             std::this_thread::sleep_for(std::chrono::seconds(5));
-            counter++;
-            rzLog(RZ_LOG_INFO, "[MAIN] Bot ejecutándose...");
+            //counter++;
+            //rzLog(RZ_LOG_INFO, "[MAIN] Bot ejecutándose...");
         }
 
     } catch (const std::exception& e) {

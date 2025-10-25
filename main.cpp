@@ -54,20 +54,16 @@ int main() {
         rzLog(RZ_LOG_INFO, "Bot inicializado correctamente");
         rzLog(RZ_LOG_INFO, "Esperando respuestas de TDLib...");
 
-        bot->run();  // Tu función run() original
+        bot->run();
 
-        // Mantener el programa corriendo Y mostrar estado cada 5 segundos
-        //int counter = 0;
+        // Mantener el programa corriendo
         while (true) {
             std::this_thread::sleep_for(std::chrono::seconds(5));
-            //counter++;
             //rzLog(RZ_LOG_INFO, "[MAIN] Bot ejecutándose...");
         }
 
     } catch (const std::exception& e) {
-
         rzLog(RZ_LOG_ERROR,"Excepción: ");
-
         rzLog_stop();
         if (bot) {
             delete bot;

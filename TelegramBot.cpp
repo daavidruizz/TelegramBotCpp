@@ -5,21 +5,16 @@
 #include <string>
 #include "rzLogger.h"
 #include <td/telegram/Log.h>
+#include <filesystem>
 #include <cmath>
 
 std::unordered_map<int32_t, int32_t> last_downloaded_;
 std::unordered_map<int32_t, std::chrono::steady_clock::time_point> last_time_;
 std::unordered_map<int32_t, int> last_progress_reported_;
 
-struct DownloadStatus {
-    int64_t chat_id;
-    int64_t file_id;
-    int64_t message_id; // mensaje que se va a editar
-    int last_percent;
-};
-
-std::unordered_map<int64_t, DownloadStatus> downloads_; // key = file_id
-
+/**
+ * @brief Constructor de la clase
+ */
 TelegramBot::TelegramBot() {
     td::td_api::setLogVerbosityLevel(0);
     td::Log::set_verbosity_level(0);
@@ -37,6 +32,9 @@ TelegramBot::TelegramBot() {
     fflush(stdout);
 }
 
+/**
+ * @brief Destructor de la clase
+ */
 TelegramBot::~TelegramBot() {
     stop();
     
@@ -47,6 +45,14 @@ TelegramBot::~TelegramBot() {
     rzLog(RZ_LOG_INFO, "TelegramBot destruido");
 }
 
+/**
+ * @brief Inicializa el objeto TelegramBot con los datos necesarios de Telegram.
+ * @param api_id API_ID de Telegram
+ * @param bot_token TOKEN del bot de Telegram
+ * @param api_hash API_HASH del bot de Telegram
+ * @param download_path Path de destino de descarga de archivos
+ * @return bool
+ */
 bool TelegramBot::initialize(const std::string& api_id, const std::string& bot_token, const std::string& api_hash, const std::string& download_path) {
     api_id_ = api_id;
     api_hash_ = api_hash;
@@ -60,6 +66,9 @@ bool TelegramBot::initialize(const std::string& api_id, const std::string& bot_t
     return true;
 }
 
+/**
+ * @brief Creación del Thread de ejecución para TelegramBot. Llama a main_loop().
+ */
 void TelegramBot::run() {
     if (running_) {
        rzLog(RZ_LOG_INFO, "[BOT] Run");
@@ -75,6 +84,9 @@ void TelegramBot::run() {
     send_tdlib_parameters();
 }
 
+/**
+ * @brief Finalización de TelegramBot. Elimina el Hilo.
+ */
 void TelegramBot::stop() {
     if (!running_) return;
     
@@ -87,6 +99,9 @@ void TelegramBot::stop() {
     rzLog(RZ_LOG_INFO, "[BOT] Detenido completamente");
 }
 
+/**
+ * @brief Loop principal del objeto TelegramBot
+ */
 void TelegramBot::main_loop() {
     rzLog(RZ_LOG_INFO, "[LOOP] Bucle principal iniciado");
     fflush(stdout);
@@ -128,8 +143,9 @@ void TelegramBot::main_loop() {
         
         if (response.object) {
             rzLog(RZ_LOG_DEBUG_EXTRA, "[LOOP] Respuesta recibida, tipo: %d", response.object->get_id());
+            
             fflush(stdout);
-            process_response(std::move(response.object));
+            process_response(response.request_id, std::move(response.object));
         } else {
             // Mostrar que estamos esperando (cada 10 iteraciones para no spam)
             static int wait_counter = 0;
@@ -144,15 +160,32 @@ void TelegramBot::main_loop() {
     rzLog(RZ_LOG_INFO, "[LOOP] Bucle principal terminado");
 }
 
+/**
+ * @brief Handler para la actualización de archivos durante la descarga de estos.
+ * @param file Archivo que se actualiza.
+ */
 void TelegramBot::handle_file_update(td::td_api::object_ptr<td::td_api::file> file) {
     int32_t file_id = file->id_;
     int64_t downloaded = file->local_->downloaded_size_;
     int64_t total = file->size_;
+    
     //bool is_downloading = file->local_->is_downloading_active_;
     bool is_complete = file->local_->is_downloading_completed_;
 
-    auto it = downloads_.find(file_id);
-    if (it == downloads_.end()) return; // No tenemos mensaje de progreso
+    DownloadMap::iterator it = downloads_.find(file_id); 
+    if (it == downloads_.end()) {
+        rzLog(RZ_LOG_WARN, "Descarga sin chat asociado. Ignorando.");
+        return;
+    }
+
+    int64_t chat_id = it->second.chat_id;
+    int64_t message_id = it->second.message_id;
+    
+    // IMPORTANTE: Solo editar si tenemos el ID real
+    if (message_id == -1) {
+        rzLog(RZ_LOG_DEBUG, "Archivo %d: Esperando ID real del mensaje antes de editar...", file_id);
+        return;  // Salir, esperamos siguiente updateFile
+    }
 
     if (total <= 0) return; // Evitar división por cero
 
@@ -187,47 +220,24 @@ void TelegramBot::handle_file_update(td::td_api::object_ptr<td::td_api::file> fi
     int eta_min = static_cast<int>(eta_sec / 60);
     int eta_sec_rem = static_cast<int>(std::round(eta_sec)) % 60;
 
-    rzLog(RZ_LOG_INFO,
-          "Archivo %d: %d%% (%d/%d bytes) | Velocidad: %.2f MB/s | ETA: %d:%02d",
-          file_id, progress_5, downloaded, total, speed_mbps, eta_min, eta_sec_rem);
 
-
-    auto edit = td::td_api::make_object<td::td_api::editMessageText>();
-    auto formattedText = td::td_api::make_object<td::td_api::formattedText>(
-        "Descargando… %",
-        std::vector<td::td_api::object_ptr<td::td_api::textEntity>>{} // vector vacío
+    char buffer[256];
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "Archivo %d: %d%% (%ld/%ld bytes) | Velocidad: %.2f MB/s | ETA: %d:%02d",
+        file_id, progress_5, downloaded, total, speed_mbps, eta_min, eta_sec_rem
     );
 
-    auto inputMsg = td::td_api::make_object<td::td_api::inputMessageText>(
-        std::move(formattedText),
-        nullptr,  // sin link preview
-        false     // clear_draft
-    );
+    rzLog(RZ_LOG_DEBUG, buffer);
+    
+    std::string editText = downloads_[file_id].original_text + "\n\nDescargando " + it->second.file.fileName + "\nExtension: " + it->second.file.extension;
 
-    edit->input_message_content_ = std::move(inputMsg);
-
-
-    send_query(std::move(edit),nullptr);
+    send_edited_message(chat_id, message_id, editText + "\n" + buffer);
 
     if (is_complete) {
-        auto msg = td::td_api::make_object<td::td_api::sendMessage>();
-        msg->chat_id_ = it->second.chat_id;
-
-        auto formattedText = td::td_api::make_object<td::td_api::formattedText>(
-            "Descargando… %",
-            std::vector<td::td_api::object_ptr<td::td_api::textEntity>>{} // vector vacío
-        );
-
-        auto inputMsg = td::td_api::make_object<td::td_api::inputMessageText>(
-            std::move(formattedText),
-            nullptr,  // sin link preview
-            false     // clear_draft
-        );
-
-        edit->input_message_content_ = std::move(inputMsg);
-
-        // Enviar
-        send_query(std::move(msg), nullptr);
+        std::time_t finish = time(nullptr); 
+        send_text_message(chat_id, "Archivo completado!\n Tiempo de descarga:" + (finish - downloads_[file_id].start_time), nullptr);
         downloads_.erase(it); // ya no necesitamos el mensaje de progreso
 
         // Limpiar estado
@@ -238,36 +248,116 @@ void TelegramBot::handle_file_update(td::td_api::object_ptr<td::td_api::file> fi
 }
 
 
-
-void TelegramBot::process_response(td::td_api::object_ptr<td::td_api::Object> response) {
+/**
+ * @brief Principal funcion de procesado de mensajes. 
+ * Inicio del ciclo de proceso cuando llega un mensaje, actualizacion, etc. 
+ * Dependiendo del tipo de response (ID), se procesará de una forma u otra.
+ * @param response Respues a procesar.
+ */
+void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td::td_api::Object> response) {
     if (!response) {
         rzLog(RZ_LOG_INFO, "[PROCESS] Respuesta null recibida");
         return;
     }
 
+        //PRIMERO: Buscar handler para este query_id
+    if (query_id != 0 && handlers_.find(query_id) != handlers_.end()) {
+        rzLog(RZ_LOG_INFO, "EJECUTANDO CALLBACK para query_id %llu", query_id);
+        handlers_[query_id](std::move(response));
+        handlers_.erase(query_id);
+        return; // Ya manejamos esta respuesta
+    }
+
     int response_id = response->get_id();
     rzLog(RZ_LOG_DEBUG_EXTRA, "[PROCESS] Procesando respuesta tipo: %d", response_id);
-    
-    if (response_id == td::td_api::updateAuthorizationState::ID) {
-        rzLog(RZ_LOG_INFO, "[PROCESS] -> Es updateAuthorizationState");
-        auto update = td::td_api::move_object_as<td::td_api::updateAuthorizationState>(response);
-        authorization_state_ = std::move(update->authorization_state_);
-        handle_authorization_update();
-    }
-    else if (response_id == td::td_api::updateNewMessage::ID) {
-        rzLog(RZ_LOG_INFO, "[PROCESS] -> Es updateNewMessage ¡MENSAJE RECIBIDO!");
-        auto update = td::td_api::move_object_as<td::td_api::updateNewMessage>(response);
-        handle_new_message(std::move(update->message_));
-    }
-    else if (response_id == td::td_api::error::ID) {
-        rzLog(RZ_LOG_INFO, "[PROCESS] -> Es error");
-        auto error = td::td_api::move_object_as<td::td_api::error>(response);
-        handle_error(error.get());
-    } else if (response->get_id() == td::td_api::updateFile::ID) {
-        auto update = td::td_api::move_object_as<td::td_api::updateFile>(response);
-        handle_file_update(std::move(update->file_));
-    } else {
-       rzLog(RZ_LOG_INFO, "[PROCESS] -> Tipo desconocido: %d (ignorando)", response_id);
+
+
+    //OPTIONES A CONTEMPLAR: 900822020, 1264668933, 1834871737, 1469292078... TODAS AL INICIO DE LA EJEC
+    switch (response_id)
+    {
+    case td::td_api::updateAuthorizationState::ID:
+        {
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> Es updateAuthorizationState");
+            auto update = td::td_api::move_object_as<td::td_api::updateAuthorizationState>(response);
+            authorization_state_ = std::move(update->authorization_state_);
+            handle_authorization_update();
+            break;
+        }
+    case td::td_api::updateNewMessage::ID:
+        {
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> Es updateNewMessage ¡MENSAJE RECIBIDO!");
+            auto update = td::td_api::move_object_as<td::td_api::updateNewMessage>(response);
+            handle_new_updateNewMessage(std::move(update->message_));
+            break;
+        }
+    case td::td_api::updateMessageEdited::ID:
+        {
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> Es updateMessageEdited ¡MENSAJE EDITADO!");
+            break;
+        }
+    case td::td_api::updateMessageContent::ID:
+        {
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> Es updateMessageContent ¡MENSAJE EDITADO!");
+            break;
+        }
+    case td::td_api::error::ID:
+        {
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> Es error");
+            auto error = td::td_api::move_object_as<td::td_api::error>(response);
+            handle_error(error.get());
+            break;
+        }
+    case td::td_api::updateFile::ID:
+        {
+            auto update = td::td_api::move_object_as<td::td_api::updateFile>(response);
+            handle_file_update(std::move(update->file_));
+            break;
+        }
+    case td::td_api::updateMessageSendSucceeded::ID:
+        {
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> Es updateMessageSendSucceeded");
+            auto update = td::td_api::move_object_as<td::td_api::updateMessageSendSucceeded>(response);
+            
+            int64_t temp_id = update->old_message_id_;  // ID temporal
+            int64_t real_id = update->message_->id_;     // ID REAL del servidor
+            
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> updateMessageSendSucceeded: ID temporal %lld → ID REAL %lld", 
+                (long long)temp_id, (long long)real_id);
+            
+            // Buscar si hay callback pendiente para este mensaje
+            auto it = pending_message_callbacks_.find(temp_id);
+            if (it != pending_message_callbacks_.end()) {
+                rzLog(RZ_LOG_DEBUG, "Ejecutando callback con ID real %lld", (long long)real_id);
+                
+                // Llamar callback con el ID REAL
+                it->second(real_id);
+                
+                // Limpiar callback usado
+                pending_message_callbacks_.erase(it);
+            }
+            
+            return;
+            break;
+        }
+    case td::td_api::ok::ID:
+        {
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> Es ok");
+            break;
+        }
+    case td::td_api::message::ID:
+        {
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> Es message");
+            auto message = td::td_api::move_object_as<td::td_api::message>(std::move(response));
+                rzLog(RZ_LOG_INFO, "MENSAJE CREADO - ID: %lld, Chat: %lld", 
+              (long long)message->id_, (long long)message->chat_id_);
+        return;
+            break;        
+        }
+    default:
+        {
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> Tipo desconocido: %d (ignorando)", response_id);            
+            break;
+        }
     }
 }
 
@@ -311,14 +401,17 @@ void TelegramBot::send_tdlib_parameters() {
     
     auto query = td::td_api::make_object<td::td_api::setTdlibParameters>();
     
+
     query->api_id_ = atoi(api_id_.c_str());
     query->api_hash_ = api_hash_;
     query->database_directory_ = "bot_db";
+    query->files_directory_="downloads";
     query->device_model_ = "Bot";
     query->application_version_ = "1.0";
     query->use_message_database_ = false;
     query->use_secret_chats_ = false;
     query->system_language_code_ = "es";
+    
     //query->enable_storage_optimizer_ = true;
     
     rzLog(RZ_LOG_INFO, "[PARAMS] Enviando setTdlibParameters con api_id=%d", 
@@ -361,6 +454,18 @@ void TelegramBot::start_file_download(int32_t file_id) {
     
     rzLog(RZ_LOG_INFO, "Iniciando descarga de archivo %d", file_id);
     
+    std::string text = "Iniciando descarga de " + downloads_[file_id].file.fileName + "\n Extension: '" + downloads_[file_id].file.extension + "'.";
+
+    //Actualizamos tiempo de comienzo de descarga
+    downloads_[file_id].start_time = std::time(nullptr);
+    downloads_[file_id].original_text = text;
+
+    send_text_message(downloads_[file_id].chat_id, text,
+    [this, file_id](int64_t msg_id)
+    {
+        if(msg_id != -1)
+            downloads_[file_id].message_id = msg_id;
+    });
     send_query(std::move(download), [this, file_id](auto response) 
     {
         handle_download_response(file_id, std::move(response));
@@ -368,8 +473,8 @@ void TelegramBot::start_file_download(int32_t file_id) {
 }
 
 /*Handler del mensaje que llega para su procesamiento*/
-void TelegramBot::handle_new_message(td::td_api::object_ptr<td::td_api::message> message) {
-    //TODO AUTENTICADOR 
+void TelegramBot::handle_new_updateNewMessage(td::td_api::object_ptr<td::td_api::message> message) {
+    //TODO AUTENTICADOR Y FILTRAR POR TIPO DE ARCHIVO
     if (!message) {
        rzLog(RZ_LOG_INFO, "[MSG] Mensaje null recibido");
         return;
@@ -382,7 +487,7 @@ void TelegramBot::handle_new_message(td::td_api::object_ptr<td::td_api::message>
 
     int64_t chat_id = message->chat_id_;
     int64_t message_id = message->id_;
-    std::string text = extract_message_text(message_id, message->content_.get());
+    std::string text = extract_updateNewMessage_data(chat_id, message->content_.get());
     
     rzLog(RZ_LOG_INFO, "[MSG] ¡MENSAJE RECIBIDO!");
     rzLog(RZ_LOG_INFO, "[MSG]   Chat ID: %lld", (long long)chat_id);
@@ -390,13 +495,18 @@ void TelegramBot::handle_new_message(td::td_api::object_ptr<td::td_api::message>
     rzLog(RZ_LOG_INFO, "[MSG]   Texto: '%s'", text.c_str());
 
     if (!text.empty()) {
-        rzLog(RZ_LOG_INFO, "[MSG] Enviando acción de escribir...");
-        send_typing_action(chat_id);
+        //rzLog(RZ_LOG_INFO, "[MSG] Enviando acción de escribir...");
+        //send_typing_action(chat_id);
         
         std::string response = generate_response(text);
         rzLog(RZ_LOG_INFO, "[MSG] Respuesta generada: '%s'", response.c_str());
         
-        send_text_message(chat_id, response);
+        send_text_message(chat_id, response, 
+        [](int64_t msg_id)
+        {
+            if(msg_id != -1)
+                  rzLog(RZ_LOG_INFO, "MSG ID: %d", msg_id);
+        });
     } else {
         rzLog(RZ_LOG_INFO, "[MSG] Mensaje sin texto, ignorando");
     }
@@ -404,52 +514,53 @@ void TelegramBot::handle_new_message(td::td_api::object_ptr<td::td_api::message>
 
 void TelegramBot::handle_video(int32_t chat_id, td::td_api::messageVideo* video)
 {
-    rzLog(RZ_LOG_INFO, "Procesando video");
+    FileType file;
+    std::string name = video->video_->file_name_;
+    std::string caption = video->caption_->text_;
+    std::string mime_type = video->video_->mime_type_;
+    std::string extension = std::filesystem::path(name).extension().string();
+    
     int32_t file_id = video->video_->video_->id_;
     int32_t size_bytes = video->video_->video_->size_;
+
+    rzLog(RZ_LOG_INFO,"Video: Nombre: '%s', Caption: '%s', Extension: '%s', Type: '%s'", 
+                            name.c_str(), 
+                            caption.c_str(), 
+                            extension.c_str(),
+                            mime_type.c_str());
     
+    if (!caption.empty())
+    {
+        video->video_->file_name_ = caption;
+    }
+
+    rzLog(RZ_LOG_INFO, "Procesando video");
     rzLog(RZ_LOG_INFO, "Video detectado - File ID: %d, Tamaño: %d bytes (%.2f MB)", 
           file_id, size_bytes, size_bytes / (1024.0 * 1024.0));
 
-    // Formato inicial del mensaje
-    char buffer[256];
-    snprintf(buffer, sizeof(buffer), "%s, Descargando: 0%%", video->video_->file_name_);
-    std::string formattedStr(buffer);
+    file.fileName = name;
+    file.extension = extension;
+    file.fileSize = size_bytes;
+    file.mimeType = mime_type;
 
-    // Crear mensaje
-    auto msg = td::td_api::make_object<td::td_api::sendMessage>();
-    msg->chat_id_ = chat_id;
-
-    auto formattedText = td::td_api::make_object<td::td_api::formattedText>(
-        formattedStr,
-        std::vector<td::td_api::object_ptr<td::td_api::textEntity>>{} // vacío
-    );
-
-    auto inputMsg = td::td_api::make_object<td::td_api::inputMessageText>(
-        std::move(formattedText),
-        nullptr,   // sin link preview
-        false      // clear_draft
-    );
-
-    msg->input_message_content_ = std::move(inputMsg);
-
-    // Enviar mensaje inicial y guardar message_id para edición futura
-    send_query(std::move(msg), [this, file_id, chat_id](auto response) {
-        if (response->get_id() == td::td_api::message::ID) {
-            auto sent_msg = td::move_tl_object_as<td::td_api::message>(response);
-            downloads_[file_id] = {file_id, chat_id, sent_msg->id_, 0};
-        } else if (response->get_id() == td::td_api::error::ID) {
-            auto err = td::move_tl_object_as<td::td_api::error>(response);
-            rzLog(RZ_LOG_ERROR, "Error enviando mensaje de progreso: %s", err->message_.c_str());
-        }
-    });
+    downloads_[file_id] = DownloadInfo{
+        chat_id,
+        -1, //No inicializado,
+        "",
+        std::time(nullptr), //De momento NULL
+        std::time(nullptr), //De momento NULL
+        file
+    };
 
     // Iniciar descarga del archivo
     start_file_download(file_id);
 }
 
 
-std::string TelegramBot::extract_message_text(int64_t chat_id, td::td_api::MessageContent* content) {
+std::string TelegramBot::extract_updateNewMessage_data(int64_t chat_id, td::td_api::MessageContent* content) {
+    
+    std::string null_str = "";
+
     if (!content) {
         rzLog(RZ_LOG_INFO, "[EXTRACT] Contenido null");
         return "";
@@ -475,10 +586,8 @@ std::string TelegramBot::extract_message_text(int64_t chat_id, td::td_api::Messa
     case td::td_api::messageVideo::ID:
         {
             td::td_api::messageVideo* video = static_cast<td::td_api::messageVideo*>(content);
-            std::string name = video->video_->file_name_;
             handle_video(chat_id, video);
-
-            return name;
+            return null_str;
             break;
         }
     default:
@@ -508,13 +617,46 @@ std::string TelegramBot::generate_response(const std::string& text) {
     }
 }
 
-void TelegramBot::send_text_message(int64_t chat_id, const std::string& text) {
-    printf("[SEND] Enviando mensaje a chat %lld: '%s'", 
+void TelegramBot::send_edited_message(int64_t chat_id, int64_t message_id, const std::string& text)
+{
+    rzLog(RZ_LOG_INFO, "[SEND] Editando mensaje %lld en chat %lld: '%s'", 
+        (long long)message_id, (long long)chat_id, text.c_str());
+    
+    auto edit_message = td::td_api::make_object<td::td_api::editMessageText>();
+    edit_message->chat_id_ = chat_id;
+    edit_message->message_id_ = message_id;
+
+    auto content = td::td_api::make_object<td::td_api::inputMessageText>();
+    auto formatted_text = td::td_api::make_object<td::td_api::formattedText>();
+    formatted_text->text_ = text;
+
+    // Log del texto que se va a establecer
+    rzLog(RZ_LOG_DEBUG, "[SEND] Editando mensaje %lld con texto: '%s'", (long long)message_id, text.c_str());
+
+    content->text_ = std::move(formatted_text);
+    edit_message->input_message_content_ = std::move(content);
+
+    send_query(std::move(edit_message), [this, chat_id, message_id](td::td_api::object_ptr<td::td_api::Object> object) {
+        if (object && object->get_id() == td::td_api::error::ID) {
+            auto error = td::td_api::move_object_as<td::td_api::error>(std::move(object));
+            rzLog(RZ_LOG_ERROR, "[SEND] Error al editar mensaje %lld en chat %lld: %s", 
+                (long long)message_id, (long long)chat_id, error->message_.c_str());
+        } else {
+            rzLog(RZ_LOG_DEBUG, "[SEND] Mensaje %lld editado exitosamente en chat %lld", 
+                (long long)message_id, (long long)chat_id);
+        }
+    });
+}
+
+void TelegramBot::send_text_message(int64_t chat_id, const std::string& text,
+                                     std::function<void(int64_t message_id)> callback) 
+{
+    rzLog(RZ_LOG_INFO,"[SEND] Enviando mensaje a chat %lld: '%s'", 
     (long long)chat_id, text.c_str());
     
     auto message = td::td_api::make_object<td::td_api::sendMessage>();
     message->chat_id_ = chat_id;
-    
+
     auto content = td::td_api::make_object<td::td_api::inputMessageText>();
     auto formatted_text = td::td_api::make_object<td::td_api::formattedText>();
     formatted_text->text_ = text;
@@ -522,29 +664,61 @@ void TelegramBot::send_text_message(int64_t chat_id, const std::string& text) {
     
     message->input_message_content_ = std::move(content);
     
-    send_query(std::move(message),nullptr);
-    printf("[SEND] Query enviado");
+    if(callback != nullptr)
+    {
+        send_query(std::move(message), [this, callback](td::td_api::object_ptr<td::td_api::Object> object) {
+            if (object && object->get_id() == td::td_api::message::ID) {
+                auto message_obj = td::td_api::move_object_as<td::td_api::message>(std::move(object));
+                int64_t message_id = message_obj->id_; 
+                int64_t temp_id = message_obj->id_;  // Este es el ID TEMPORAL
+                rzLog(RZ_LOG_INFO, "[SEND] Mensaje enviado con ID TEMPORAL: %lld", (long long)message_id);
+                
+                // Guardar callback para cuando llegue el ID real
+                pending_message_callbacks_[temp_id] = callback;
+            } 
+            else if (object && object->get_id() == td::td_api::error::ID) {
+                auto error = td::td_api::move_object_as<td::td_api::error>(std::move(object));
+                rzLog(RZ_LOG_ERROR, "[SEND] Error al enviar mensaje: %s", error->message_.c_str());
+                
+                if (callback) {
+                    callback(-1);
+                }
+            }
+            else {
+                rzLog(RZ_LOG_WARN, "[SEND] Respuesta inesperada al enviar mensaje");
+                if (callback) {
+                    callback(-1);
+                }
+            }
+        });
+    } 
+    else 
+    {
+        send_query(std::move(message), nullptr);
+    }
+    rzLog(RZ_LOG_INFO,"[SEND] Query enviado");
 }
 
-void TelegramBot::send_typing_action(int64_t chat_id) {
-    printf("[TYPING] Enviando acción de escribir a chat %lld", 
+void TelegramBot::send_typing_action(int64_t chat_id) 
+{
+    rzLog(RZ_LOG_INFO,"[TYPING] Enviando acción de escribir a chat %lld", 
     (long long)chat_id);
     
     auto action = td::td_api::make_object<td::td_api::sendChatAction>();
     action->chat_id_ = chat_id;
     action->action_ = td::td_api::make_object<td::td_api::chatActionTyping>();
     
-    send_query(std::move(action), nullptr);
+    send_query(std::move(action),nullptr);
 }
 
 void TelegramBot::handle_error(td::td_api::error* error) {
     if (!error) return;
     
-    printf("[ERROR] Error TDLib: %s (Código: %d)", 
+    rzLog(RZ_LOG_ERROR,"TDLib: %s (Código: %d)", 
     error->message_.c_str(), error->code_);
     
     if (error->code_ == 401) {
-        printf("[ERROR] Error de autenticación! Reiniciando...");
+        rzLog(RZ_LOG_ERROR,"Error de autenticación! Reiniciando...");
         need_restart_ = true;
     }
 }

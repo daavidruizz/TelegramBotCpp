@@ -19,6 +19,9 @@
 class TelegramBot {
     private:
     
+    // Mapa para callbacks pendientes esperando ID real
+    std::map<int64_t, std::function<void(int64_t)>> pending_message_callbacks_;
+
     // Credenciales
     std::string api_id_;
     std::string api_hash_;
@@ -46,6 +49,25 @@ class TelegramBot {
 
 
 public:
+
+    struct FileType {
+        std::string fileName;
+        std::string extension;
+        std::string mimeType;
+        int64_t fileSize;
+    };
+
+    struct DownloadInfo {
+        int64_t chat_id;
+        int64_t message_id;
+        std::string original_text;
+        time_t start_time;
+        time_t finish_time;
+        FileType file;
+    };
+
+    using DownloadMap = std::unordered_map<int32_t, DownloadInfo>;
+
     TelegramBot();
     ~TelegramBot();
     
@@ -55,11 +77,14 @@ public:
     void stop();
     
 private:
+
+    DownloadMap downloads_;
+
     // Bucle principal
     void main_loop();
     
     // Procesar respuestas
-    void process_response(td::td_api::object_ptr<td::td_api::Object> response);
+    void process_response(uint64_t query_id, td::td_api::object_ptr<td::td_api::Object> response);
     
     // Manejo de autorización
     void handle_authorization_update();
@@ -69,12 +94,15 @@ private:
     void start_file_download(int32_t file_id);
 
     // Manejo de mensajes
-    void handle_new_message(td::td_api::object_ptr<td::td_api::message> message);
-    std::string extract_message_text(int64_t chat_id, td::td_api::MessageContent* content);
+    void handle_new_updateNewMessage(td::td_api::object_ptr<td::td_api::message> message);
+    std::string extract_updateNewMessage_data(int64_t chat_id, td::td_api::MessageContent* content);
     std::string generate_response(const std::string& text);
     
     // Envío de mensajes
-    void send_text_message(int64_t chat_id, const std::string& text);
+    void send_text_message(int64_t chat_id, const std::string& text, std::function<void(int64_t message_id)> callback);
+    //void send_text_message(int64_t chat_id, const std::string& text);
+    void send_edited_message(int64_t chat_id, int64_t message_id, const std::string& text);
+
     void send_typing_action(int64_t chat_id);
     
     void handle_video(int32_t chat_id, td::td_api::messageVideo* video);

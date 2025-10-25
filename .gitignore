@@ -3,5 +3,8 @@ config.txt
 bin/
 *.o
 bot_db/
+downloads/
+bin/
 log.txt
 telegram_bot
+config.txt

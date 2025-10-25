@@ -6,12 +6,17 @@ CC = gcc
 CXXFLAGS = -std=c++17 -O2 -Wall -I./include -I./rzLogger/include -I/home/rzzz/Documents/telegram_dev/td/tdlib/include -pthread
 CFLAGS = -O2 -Wall -I./include -I./rzLogger/include -pthread
 
+CXXFLAGS_DEBUG = -std=c++17 -g -O0 -Wall -I./include -I./rzLogger/include -I/home/rzzz/Documents/telegram_dev/td/tdlib/include -pthread
+CFLAGS_DEBUG = -g -O0 -Wall -I./include -I./rzLogger/include -pthread
+
 # Archivos fuente - con rutas completas
 SRCS = main.cpp TelegramBot.cpp
 C_SRCS = rzLogger/rzLogger.c
 
 # Objetos - manteniendo la estructura de directorios
 OBJS = $(SRCS:.cpp=.o) rzLogger.o
+OBJS_DEBUG = $(SRCS:.cpp=.o) rzLogger.o
+
 
 # Librerías TDLib
 LIBS = \
@@ -35,6 +40,10 @@ TARGET = telegram_bot
 
 # Reglas EXPLÍCITAS para cada archivo objeto
 all: $(TARGET)
+
+debug: CXXFLAGS=$(CXXFLAGS_DEBUG)
+debug: CFLAGS=$(CFLAGS_DEBUG)
+debug: clean $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CXX) $(OBJS) -Wl,--start-group $(LIBS) -Wl,--end-group -o $(TARGET)

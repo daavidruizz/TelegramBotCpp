@@ -236,8 +236,14 @@ void TelegramBot::handle_file_update(td::td_api::object_ptr<td::td_api::file> fi
     send_edited_message(chat_id, message_id, editText + "\n" + buffer);
 
     if (is_complete) {
+        
         std::time_t finish = time(nullptr); 
-        send_text_message(chat_id, "Archivo completado!\n Tiempo de descarga:" + (finish - downloads_[file_id].start_time), nullptr);
+        double diff = difftime(finish, downloads_[file_id].start_time);
+        int minutes = static_cast<int>(diff / 60);
+        std::string mensaje = "Archivo completado!\nTiempo de descarga: " +
+                            std::to_string(minutes) + " min";
+
+        send_text_message(chat_id, mensaje, nullptr);
         downloads_.erase(it); // ya no necesitamos el mensaje de progreso
 
         // Limpiar estado
@@ -361,6 +367,12 @@ void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td:
     }
 }
 
+/**
+ * @brief Gestiona los cambios de estado de autorización del cliente TDLib.
+ * 
+ * Se invoca cuando TDLib notifica un cambio en el estado de autorización del bot.
+ * Controla las transiciones necesarias para completar la autenticación.
+ */
 void TelegramBot::handle_authorization_update() {
     if (!authorization_state_) {
         rzLog(RZ_LOG_INFO, "[AUTH] Estado de autorización null");
@@ -396,6 +408,12 @@ void TelegramBot::handle_authorization_update() {
     }
 }
 
+/**
+ * @brief Envía los parámetros de configuración de TDLib necesarios para iniciar sesión.
+ * 
+ * Incluye los valores como API ID, API hash, base de datos local, y otras opciones
+ * necesarias para inicializar correctamente la instancia de TDLib.
+ */
 void TelegramBot::send_tdlib_parameters() {
     rzLog(RZ_LOG_INFO, "[PARAMS] Creando parámetros TDLib...");
     
@@ -420,6 +438,9 @@ void TelegramBot::send_tdlib_parameters() {
     send_query(std::move(query), nullptr);
 }
 
+/**
+ * @brief Envía el token del bot a TDLib para completar la autenticación.
+ */
 void TelegramBot::send_bot_token() {
     rzLog(RZ_LOG_INFO, "[TOKEN] Enviando token de autenticación...");
     
@@ -431,6 +452,12 @@ void TelegramBot::send_bot_token() {
     send_query(std::move(auth), nullptr);
 }
 
+/**
+ * @brief Maneja la respuesta de la descarga de archivo recibida desde TDLib.
+ * 
+ * @param file_id Identificador del archivo descargado.
+ * @param response Objeto de respuesta devuelto por TDLib que contiene el resultado de la operacion de descarga.
+ */
 void TelegramBot::handle_download_response(int32_t file_id, td::td_api::object_ptr<td::td_api::Object> response) {
     if (response->get_id() == td::td_api::file::ID) {
         auto file = td::move_tl_object_as<td::td_api::file>(response);
@@ -444,6 +471,10 @@ void TelegramBot::handle_download_response(int32_t file_id, td::td_api::object_p
 }
 
 
+/**
+ * @brief Inicia la descarga de un archivo especificado.
+ * @param file_id Identificador del archivo a descargar.
+ */
 void TelegramBot::start_file_download(int32_t file_id) {
     auto download = td::td_api::make_object<td::td_api::downloadFile>();
     download->file_id_ = file_id;
@@ -473,6 +504,13 @@ void TelegramBot::start_file_download(int32_t file_id) {
 }
 
 /*Handler del mensaje que llega para su procesamiento*/
+/**
+ * @brief Procesa un nuevo mensaje recibido por el bot.
+ * 
+ * Handler principal para las actualizaciones entrantes del tipo message.
+ * Se encarga de analizar el contenido.
+ * @param message Objeto del mensaje recibido desde TDLib.
+ */
 void TelegramBot::handle_new_updateNewMessage(td::td_api::object_ptr<td::td_api::message> message) {
     //TODO AUTENTICADOR Y FILTRAR POR TIPO DE ARCHIVO
     if (!message) {
@@ -512,6 +550,12 @@ void TelegramBot::handle_new_updateNewMessage(td::td_api::object_ptr<td::td_api:
     }
 }
 
+/**
+ * @brief Gestiona los mensajes de tipo video recibidos.
+ * 
+ * @param chat_id ID del chat donde se recibió el video.
+ * @param video Puntero al objeto messageVideo recibido.
+ */
 void TelegramBot::handle_video(int32_t chat_id, td::td_api::messageVideo* video)
 {
     FileType file;
@@ -556,7 +600,14 @@ void TelegramBot::handle_video(int32_t chat_id, td::td_api::messageVideo* video)
     start_file_download(file_id);
 }
 
-
+/**
+ * @brief Extrae datos relevantes de un objeto MessageContent.
+ * 
+ * @param chat_id Identificador del chat asociado.
+ * @param content Puntero al contenido del mensaje.
+ * 
+ * @return Cadena con el texto o información extraída del mensaje.
+ */
 std::string TelegramBot::extract_updateNewMessage_data(int64_t chat_id, td::td_api::MessageContent* content) {
     
     std::string null_str = "";
@@ -598,6 +649,13 @@ std::string TelegramBot::extract_updateNewMessage_data(int64_t chat_id, td::td_a
     return "";
 }
 
+/**
+ * @brief Genera una respuesta automática en función del texto recibido.
+ * 
+ * @param text Texto recibido o procesado.
+ * 
+ * @return Cadena con la respuesta generada.
+ */
 std::string TelegramBot::generate_response(const std::string& text) {
     if (strcmp(text.c_str(), "/start") == 0) {
         return "Bienvenido DR.";
@@ -617,6 +675,13 @@ std::string TelegramBot::generate_response(const std::string& text) {
     }
 }
 
+/**
+ * @brief Edita un mensaje existente.
+ * 
+ * @param chat_id Identificador del chat destino.
+ * @param message_id Identificador del mensaje que se desea editar.
+ * @param text Texto nuevo que reemplazará el contenido anterior.
+ */
 void TelegramBot::send_edited_message(int64_t chat_id, int64_t message_id, const std::string& text)
 {
     rzLog(RZ_LOG_INFO, "[SEND] Editando mensaje %lld en chat %lld: '%s'", 
@@ -648,6 +713,13 @@ void TelegramBot::send_edited_message(int64_t chat_id, int64_t message_id, const
     });
 }
 
+/**
+ * @brief Envía un mensaje de texto al chat especificado.
+ * 
+ * @param chat_id Identificador del chat destino.
+ * @param text Contenido textual del mensaje.
+ * @param callback Función callback opcional que recibe el ID del mensaje enviado.
+ */
 void TelegramBot::send_text_message(int64_t chat_id, const std::string& text,
                                      std::function<void(int64_t message_id)> callback) 
 {
@@ -711,6 +783,13 @@ void TelegramBot::send_typing_action(int64_t chat_id)
     send_query(std::move(action),nullptr);
 }
 
+
+/**
+ * @brief Maneja los errores devueltos por TDLib.
+ * Registra o actúa según el tipo de error recibido en la respuesta TDLib.
+ * 
+ * @param error Puntero al objeto de error recibido.
+ */
 void TelegramBot::handle_error(td::td_api::error* error) {
     if (!error) return;
     
@@ -723,6 +802,14 @@ void TelegramBot::handle_error(td::td_api::error* error) {
     }
 }
 
+
+/**
+ * @brief Envía una consulta genérica a TDLib y asigna un handler para su respuesta.
+ * 
+ * @param query Objeto que representa la función o acción a ejecutar en TDLib.
+ * 
+ * @param handler Función callback que recibe la respuesta de TDLib.
+ */
 void TelegramBot::send_query(
     td::td_api::object_ptr<td::td_api::Function> query,
     std::function<void(td::td_api::object_ptr<td::td_api::Object>)> handler) {

@@ -15,10 +15,34 @@
 #include <map>
 #include <functional>
 
-
+/**
+ * @class TelegramBot
+ * @brief Clase principal que gestiona la comunicación entre el bot y la biblioteca TDLib.
+ * 
+ * Encapsula las operaciones de inicialización, envío y recepción de mensajes,
+ * descargas de archivos, manejo de errores y respuestas automáticas.
+ */
 class TelegramBot {
     private:
     
+    struct FileType {
+        std::string fileName;
+        std::string extension;
+        std::string mimeType;
+        int64_t fileSize;
+    };
+    
+    struct DownloadInfo {
+        int64_t chat_id;
+        int64_t message_id;
+        std::string original_text;
+        time_t start_time;
+        time_t finish_time;
+        FileType file;
+    };
+
+    using DownloadMap = std::unordered_map<int32_t, DownloadInfo>;
+
     // Mapa para callbacks pendientes esperando ID real
     std::map<int64_t, std::function<void(int64_t)>> pending_message_callbacks_;
 
@@ -28,8 +52,7 @@ class TelegramBot {
     std::string bot_token_;
     std::string download_pàth_;
     
-    // Cliente TDLib - PUNTERO NORMAL ESTILO C
-    td::ClientManager* client_manager_;  // En lugar de unique_ptr
+    td::ClientManager* client_manager_; 
     std::int32_t client_id_;
     
     // Estado del bot
@@ -49,24 +72,6 @@ class TelegramBot {
 
 
 public:
-
-    struct FileType {
-        std::string fileName;
-        std::string extension;
-        std::string mimeType;
-        int64_t fileSize;
-    };
-
-    struct DownloadInfo {
-        int64_t chat_id;
-        int64_t message_id;
-        std::string original_text;
-        time_t start_time;
-        time_t finish_time;
-        FileType file;
-    };
-
-    using DownloadMap = std::unordered_map<int32_t, DownloadInfo>;
 
     TelegramBot();
     ~TelegramBot();

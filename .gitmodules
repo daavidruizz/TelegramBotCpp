@@ -1,0 +1,3 @@
+[submodule "rzLogger"]
+	path = rzLogger
+	url = https://github.com/daavidruizz/rzLogger.git

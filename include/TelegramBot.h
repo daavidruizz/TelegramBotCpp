@@ -13,6 +13,7 @@
 #include <cstring>    // Para strcmp, strstr
 #include <cstdlib>    // Para atoi
 #include <map>
+#include <set>
 #include <functional>
 
 /**
@@ -43,6 +44,8 @@ class TelegramBot {
 
     using DownloadMap = std::unordered_map<int32_t, DownloadInfo>;
 
+    std::set<int64_t> user_ids_allowed;
+
     // Mapa para callbacks pendientes esperando ID real
     std::map<int64_t, std::function<void(int64_t)>> pending_message_callbacks_;
 
@@ -50,7 +53,9 @@ class TelegramBot {
     std::string api_id_;
     std::string api_hash_;
     std::string bot_token_;
-    std::string download_pàth_;
+    std::string path_bot_db_;
+    std::string download_path_;
+
     
     td::ClientManager* client_manager_; 
     std::int32_t client_id_;
@@ -70,6 +75,8 @@ class TelegramBot {
     // Estado de autorización
     td::td_api::object_ptr<td::td_api::AuthorizationState> authorization_state_;
 
+    bool is_message_allowed(int64_t user_id);
+    int64_t get_sender_user_id(td::td_api::MessageSender* sender);
 
 public:
 
@@ -77,13 +84,13 @@ public:
     ~TelegramBot();
     
     // Funciones principales
-    bool initialize(const std::string& api_id, const std::string& bot_token, const std::string& api_hash, const std::string& download_path);
+    bool initialize(const std::string& api_id, const std::string& bot_token, const std::string& api_hash, const std::string& bot_db_path, const std::string& download_path, const std::string& user_id_credentials);
     void run();
     void stop();
-    
-private:
 
     DownloadMap downloads_;
+
+    bool usingCredentials = 0;
 
     // Bucle principal
     void main_loop();
@@ -111,6 +118,7 @@ private:
     void send_typing_action(int64_t chat_id);
     
     void handle_video(int32_t chat_id, td::td_api::messageVideo* video);
+    void handle_document(int32_t chat_id, td::td_api::messageDocument* document);
     
     void handle_file_update(td::td_api::object_ptr<td::td_api::file> file);
     void handle_download_response(int32_t file_id, td::td_api::object_ptr<td::td_api::Object> response);

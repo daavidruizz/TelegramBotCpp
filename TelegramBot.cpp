@@ -6,6 +6,7 @@
 #include "rzLogger.h"
 #include <td/telegram/Log.h>
 #include <filesystem>
+#include <functional>
 #include <cmath>
 
 std::unordered_map<int32_t, int32_t> last_downloaded_;
@@ -50,15 +51,64 @@ TelegramBot::~TelegramBot() {
  * @param api_id API_ID de Telegram
  * @param bot_token TOKEN del bot de Telegram
  * @param api_hash API_HASH del bot de Telegram
+ * @param bot_db_path_str Path de la DB del Bot
  * @param download_path Path de destino de descarga de archivos
+ * @param user_id_credentials Lista de USERS_ID separados por comas. En caso de estar vacio no se usara esta funcionalidad.
  * @return bool
  */
-bool TelegramBot::initialize(const std::string& api_id, const std::string& bot_token, const std::string& api_hash, const std::string& download_path) {
+bool TelegramBot::initialize(const std::string& api_id, 
+                            const std::string& bot_token, 
+                            const std::string& api_hash, 
+                            const std::string& bot_db_path, 
+                            const std::string& download_path, 
+                            const std::string& user_id_credentials)
+{
     api_id_ = api_id;
     api_hash_ = api_hash;
     bot_token_ = bot_token;
-    download_pàth_ = download_path;
-    
+    path_bot_db_ = bot_db_path;
+    download_path_ = download_path;
+
+    if (!user_id_credentials.empty()) {
+        std::stringstream ss(user_id_credentials);
+        std::string id_str;
+
+        while (std::getline(ss, id_str, ',')) {
+            // Limpiar espacios
+            id_str.erase(0, id_str.find_first_not_of(" \t\n\r"));
+            id_str.erase(id_str.find_last_not_of(" \t\n\r") + 1);
+            
+            if (id_str.empty())
+                continue;
+            
+            try {
+                int64_t user_id = std::stoll(id_str);
+                user_ids_allowed.insert(user_id);  // insert en lugar de push_back
+                rzLog(RZ_LOG_INFO, "Usuario autorizado: %lld", (long long)user_id);
+            } catch (const std::exception& e) {
+                rzLog(RZ_LOG_ERROR, "ID inválido: '%s' - %s", id_str.c_str(), e.what());
+            }
+        }
+        
+        usingCredentials = true;
+        rzLog(RZ_LOG_INFO, "Credenciales activadas: %zu usuarios", user_ids_allowed.size());
+    }
+
+    if(!path_bot_db_.empty() && !download_path_.empty())
+    {
+        if(!std::filesystem::exists(path_bot_db_) || !std::filesystem::exists(download_path_))
+        {
+            rzLog(RZ_LOG_ERROR, "[BOT] Error inicializando bot: No existe el path especificado para la DB o DOWNLOADS");
+            return false;
+        }
+    } 
+    else 
+    {
+        rzLog(RZ_LOG_ERROR, "[BOT] Error inicializando bot: No existe el path especificado para la DB o DOWNLOADS");
+        return false;
+    }
+
+  
    rzLog(RZ_LOG_INFO, "[BOT] Inicializado con API_ID=%s, API_HASH=%s..., BOT_TOKEN=%s...", 
            api_id.c_str(), 
            api_hash.substr(0, 8).c_str(),
@@ -253,6 +303,58 @@ void TelegramBot::handle_file_update(td::td_api::object_ptr<td::td_api::file> fi
     }
 }
 
+/**
+ * @brief Obtiene el user ID de un objeto MessageSender
+ * 
+ * @param sender MessageSender
+ * 
+ * @return Devuelve el sender ID
+ */
+int64_t TelegramBot::get_sender_user_id(td::td_api::MessageSender* sender)
+{
+    if (!sender) {
+        return -1;
+    }
+    
+    if (sender->get_id() == td::td_api::messageSenderUser::ID) {
+        auto sender_user = static_cast<td::td_api::messageSenderUser*>(sender);
+        return sender_user->user_id_;
+    }
+    
+    // No es un usuario (es un canal/grupo)
+    return -1;  
+}
+
+
+/**
+ * @brief Funcion que comprueba si el mensaje esta permitido por el Bot
+ * 
+ * @param user_id
+ * 
+ * @return True si el USER_ID esta permitido. -1 en otro caso.
+ */
+bool TelegramBot::is_message_allowed(int64_t user_id) {
+    // Sender no es usuario
+    if (user_id == -1) {
+        rzLog(RZ_LOG_WARN, "Mensaje de sender no-usuario. Ignorando.");
+        return false;
+    }
+    
+    // Si no usamos credenciales, permitir todos
+    if (!usingCredentials) {
+        return true;
+    }
+    
+    // Verificar lista de autorizados
+    bool is_allowed = user_ids_allowed.count(user_id) > 0;
+    
+    if (!is_allowed) {
+        rzLog(RZ_LOG_WARN, "Usuario %lld NO autorizado.", (long long)user_id);
+    }
+    
+    return is_allowed;
+}
+
 
 /**
  * @brief Principal funcion de procesado de mensajes. 
@@ -275,6 +377,7 @@ void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td:
     }
 
     int response_id = response->get_id();
+    
     rzLog(RZ_LOG_DEBUG_EXTRA, "[PROCESS] Procesando respuesta tipo: %d", response_id);
 
 
@@ -293,14 +396,63 @@ void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td:
         {
             rzLog(RZ_LOG_INFO, "[PROCESS] -> Es updateNewMessage ¡MENSAJE RECIBIDO!");
             auto update = td::td_api::move_object_as<td::td_api::updateNewMessage>(response);
+            
+            if(!is_message_allowed(get_sender_user_id(update->message_->sender_id_.get())))
+            {
+                send_text_message(update->message_->chat_id_, 
+                                "No estás autorizado para usar este bot.", 
+                                nullptr);
+                break;
+            }
+
             handle_new_updateNewMessage(std::move(update->message_));
             break;
         }
     case td::td_api::updateMessageEdited::ID:
         {
             rzLog(RZ_LOG_INFO, "[PROCESS] -> Es updateMessageEdited ¡MENSAJE EDITADO!");
+            auto update = td::td_api::move_object_as<td::td_api::updateMessageEdited>(response);
+            // Opción: Mantener un caché de message_id → user_id
+            // O simplemente ignorar ediciones de no autorizados
             break;
         }
+    case td::td_api::updateNewCallbackQuery::ID:
+    {
+        auto update = td::td_api::move_object_as<td::td_api::updateNewCallbackQuery>(response);
+        
+        if (!is_message_allowed(update->sender_user_id_)) {
+            rzLog(RZ_LOG_WARN, "Callback query de usuario no autorizado: %lld", 
+                update->sender_user_id_);
+            break;
+        }
+        
+        // Procesar callback (botones inline)
+        break;
+    }
+    case td::td_api::updateNewInlineQuery::ID:
+    {
+        auto update = td::td_api::move_object_as<td::td_api::updateNewInlineQuery>(response);
+        
+        if (!is_message_allowed(update->sender_user_id_)) {
+            rzLog(RZ_LOG_WARN, "Inline query de usuario no autorizado: %lld", 
+                update->sender_user_id_);
+            break;
+        }
+        
+        // Procesar inline query
+        break;
+    }
+    case td::td_api::updateNewChosenInlineResult::ID:
+    {
+        auto update = td::td_api::move_object_as<td::td_api::updateNewChosenInlineResult>(response);
+        
+        if (!is_message_allowed(update->sender_user_id_)) {
+            break;
+        }
+        
+        // Procesar resultado inline elegido
+        break;
+    }
     case td::td_api::updateMessageContent::ID:
         {
             rzLog(RZ_LOG_INFO, "[PROCESS] -> Es updateMessageContent ¡MENSAJE EDITADO!");
@@ -422,8 +574,8 @@ void TelegramBot::send_tdlib_parameters() {
 
     query->api_id_ = atoi(api_id_.c_str());
     query->api_hash_ = api_hash_;
-    query->database_directory_ = "bot_db";
-    query->files_directory_="downloads";
+    query->database_directory_ = path_bot_db_;
+    query->files_directory_= download_path_;
     query->device_model_ = "Bot";
     query->application_version_ = "1.0";
     query->use_message_database_ = false;
@@ -535,20 +687,110 @@ void TelegramBot::handle_new_updateNewMessage(td::td_api::object_ptr<td::td_api:
     if (!text.empty()) {
         //rzLog(RZ_LOG_INFO, "[MSG] Enviando acción de escribir...");
         //send_typing_action(chat_id);
-        
-        std::string response = generate_response(text);
-        rzLog(RZ_LOG_INFO, "[MSG] Respuesta generada: '%s'", response.c_str());
-        
-        send_text_message(chat_id, response, 
-        [](int64_t msg_id)
-        {
-            if(msg_id != -1)
-                  rzLog(RZ_LOG_INFO, "MSG ID: %d", msg_id);
-        });
     } else {
         rzLog(RZ_LOG_INFO, "[MSG] Mensaje sin texto, ignorando");
     }
 }
+
+/**
+ * @brief Gestiona los mensajes de tipo Document recibidos.
+ * 
+ * @param chat_id ID del chat donde se recibió el video.
+ * @param document Puntero al objeto messageDocument recibido.
+ */
+void TelegramBot::handle_document(int32_t chat_id, td::td_api::messageDocument* document)
+{
+    FileType file;
+    std::string name = document->document_->file_name_;
+    std::string caption = document->caption_->text_;
+    std::string mime_type = document->document_->mime_type_;
+    std::string extension = std::filesystem::path(name).extension().string();
+    
+    int32_t file_id = document->document_->document_->id_;
+    int32_t size_bytes = document->document_->document_->size_;
+
+    rzLog(RZ_LOG_INFO,"Documento: Nombre: '%s', Caption: '%s', Extension: '%s', Type: '%s'", 
+                            name.c_str(), 
+                            caption.c_str(), 
+                            extension.c_str(),
+                            mime_type.c_str());
+
+    if (!caption.empty())
+    {
+        document->document_->file_name_ = caption;
+    }
+
+    rzLog(RZ_LOG_INFO, "Procesando documento");
+    rzLog(RZ_LOG_INFO, "Documento detectado - File ID: %d, Tamaño: %d bytes (%.2f MB)", 
+          file_id, size_bytes, size_bytes / (1024.0 * 1024.0));
+
+    file.fileName = name;
+    file.extension = extension;
+    file.fileSize = size_bytes;
+    file.mimeType = mime_type;
+
+    downloads_[file_id] = DownloadInfo{
+        chat_id,
+        -1, //No inicializado,
+        "",
+        std::time(nullptr), //De momento NULL
+        std::time(nullptr), //De momento NULL
+        file
+    };
+
+    // Iniciar descarga del archivo
+    start_file_download(file_id);
+}
+
+/**
+ * @brief Gestiona los mensajes de tipo fotos recibidos.
+ * 
+ * @param chat_id ID del chat donde se recibió el video.
+ * @param photo Puntero al objeto messagePhoto recibido.
+ */
+/*
+void TelegramBot::handle_photo(int32_t chat_id, td::td_api::messagePhoto* photo)
+{
+    FileType file;
+    //std::string name = photo->photo_->;
+    std::string caption = photo->caption_->text_;
+    std::string extension = std::filesystem::path(name).extension().string();
+    
+    int32_t file_id = video->video_->video_->id_;
+    int32_t size_bytes = video->video_->video_->size_;
+
+    rzLog(RZ_LOG_INFO,"Video: Nombre: '%s', Caption: '%s', Extension: '%s', Type: '%s'", 
+                            name.c_str(), 
+                            caption.c_str(), 
+                            extension.c_str(),
+                            mime_type.c_str());
+    
+    if (!caption.empty())
+    {
+        video->video_->file_name_ = caption;
+    }
+
+    rzLog(RZ_LOG_INFO, "Procesando video");
+    rzLog(RZ_LOG_INFO, "Video detectado - File ID: %d, Tamaño: %d bytes (%.2f MB)", 
+          file_id, size_bytes, size_bytes / (1024.0 * 1024.0));
+
+    file.fileName = name;
+    file.extension = extension;
+    file.fileSize = size_bytes;
+    file.mimeType = mime_type;
+
+    downloads_[file_id] = DownloadInfo{
+        chat_id,
+        -1, //No inicializado,
+        "",
+        std::time(nullptr), //De momento NULL
+        std::time(nullptr), //De momento NULL
+        file
+    };
+
+    // Iniciar descarga del archivo
+    start_file_download(file_id);
+}*/
 
 /**
  * @brief Gestiona los mensajes de tipo video recibidos.
@@ -629,8 +871,17 @@ std::string TelegramBot::extract_updateNewMessage_data(int64_t chat_id, td::td_a
             if (text_message->text_)
             {
                 std::string result = text_message->text_->text_;
-                rzLog(RZ_LOG_INFO,"[EXTRACT] Texto extraído: '%s'", result.c_str());
-                return result;
+                rzLog(RZ_LOG_DEBUG_EXTRA,"[EXTRACT] Texto extraído: '%s'", result.c_str());
+                
+                std::string response = generate_response(result);
+                rzLog(RZ_LOG_DEBUG_EXTRA, "[MSG] Respuesta generada: '%s'", response.c_str());
+                
+                send_text_message(chat_id, response, 
+                [](int64_t msg_id)
+                {
+                    if(msg_id != -1)
+                        rzLog(RZ_LOG_DEBUG_EXTRA, "MSG ID: %d", msg_id);
+                });
             }
             break;
         }
@@ -641,8 +892,19 @@ std::string TelegramBot::extract_updateNewMessage_data(int64_t chat_id, td::td_a
             return null_str;
             break;
         }
+    case td::td_api::messagePhoto::ID:
+        {
+            //td::td_api::messagePhoto* photo = static_cast<td::td_api::messagePhoto*>(content);
+            break;
+        }
+    case td::td_api::messageDocument::ID:
+        {
+            td::td_api::messageDocument* document = static_cast<td::td_api::messageDocument*>(content);
+            handle_document(chat_id, document);
+            break;
+        }
     default:
-        rzLog(RZ_LOG_INFO,"[EXTRACT] No se pudo extraer DEFAULT");
+        rzLog(RZ_LOG_WARN,"[EXTRACT] No se pudo extraer DEFAULT");
         break;
     }
     

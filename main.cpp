@@ -30,22 +30,29 @@ int main() {
 
     // Obtener credenciales de variables de entorno
     const char* api_id_str = std::getenv("TELEGRAM_API_ID");
-    const char* api_hash = std::getenv("TELEGRAM_API_HASH");
-    const char* bot_token = std::getenv("TELEGRAM_BOT_TOKEN");
-    const char* download_path = std::getenv("TELEGRAM_DOWNLOAD_PATH");
+    const char* api_hash_str = std::getenv("TELEGRAM_API_HASH");
+    const char* bot_token_str = std::getenv("TELEGRAM_BOT_TOKEN");
+    const char* bot_db_path_str = std::getenv("TELEGRAM_DB_PATH");
+    const char* bot_download_path_str = std::getenv("TELEGRAM_DOWNLOAD_PATH");
+    const char* user_id_credentials_str = std::getenv("USER_ID_CREDENTIALS");
 
-    if (!api_id_str || !api_hash || !bot_token || !download_path) {
+    if (!api_id_str || !api_hash_str || !bot_token_str || !bot_db_path_str || !bot_download_path_str) {
         rzLog(RZ_LOG_ERROR, "Error: Debes establecer las variables de entorno: TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN, TELEGRAM_DOWNLOAD_PATH");
         return 1;
     }
 
     std::string api_id(api_id_str);
+    std::string api_hash(api_hash_str);
+    std::string bot_token(bot_token_str);
+    std::string bot_db_path(bot_db_path_str);
+    std::string bot_download_path(bot_download_path_str);
+    std::string user_id_credentials(user_id_credentials_str);
 
     try {
         
         bot = new TelegramBot();
         
-        if (!bot->initialize(api_id, bot_token, api_hash, download_path)) {
+        if (!bot->initialize(api_id, bot_token, api_hash, bot_db_path_str, bot_download_path, user_id_credentials)) {
             rzLog(RZ_LOG_ERROR, "Error al inicializar el bot");
             delete bot;
             return 1;

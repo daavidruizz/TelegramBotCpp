@@ -8,3 +8,5 @@ bin/
 log.txt
 telegram_bot
 config.txt
+cross_libs_arm64/
+deploy_to_pi5.sh

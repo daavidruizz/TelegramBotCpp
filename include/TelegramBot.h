@@ -45,6 +45,7 @@ class TelegramBot {
     using DownloadMap = std::unordered_map<int32_t, DownloadInfo>;
 
     std::set<int64_t> user_ids_allowed;
+    std::time_t bot_start_time_;
 
     // Mapa para callbacks pendientes esperando ID real
     std::map<int64_t, std::function<void(int64_t)>> pending_message_callbacks_;
@@ -96,7 +97,7 @@ public:
     void main_loop();
     
     // Procesar respuestas
-    void process_response(uint64_t query_id, td::td_api::object_ptr<td::td_api::Object> response);
+    void process_response(uint64_t query_id, td::td_api::object_ptr<td::td_api::Object>&& response);
     
     // Manejo de autorización
     void handle_authorization_update();

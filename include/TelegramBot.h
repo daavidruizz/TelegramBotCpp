@@ -47,6 +47,10 @@ class TelegramBot {
     std::set<int64_t> user_ids_allowed;
     std::time_t bot_start_time_;
 
+    std::unordered_map<int32_t, int64_t> last_downloaded_;  
+    std::unordered_map<int32_t, std::chrono::steady_clock::time_point> last_time_;
+    std::unordered_map<int32_t, int> last_progress_reported_;
+
     // Mapa para callbacks pendientes esperando ID real
     std::map<int64_t, std::function<void(int64_t)>> pending_message_callbacks_;
 
@@ -107,7 +111,7 @@ public:
     void start_file_download(int32_t file_id);
 
     // Manejo de mensajes
-    void handle_new_updateNewMessage(td::td_api::object_ptr<td::td_api::message> message);
+    void handle_new_updateNewMessage(td::td_api::object_ptr<td::td_api::message>&& message);
     std::string extract_updateNewMessage_data(int64_t chat_id, td::td_api::MessageContent* content);
     std::string generate_response(const std::string& text);
     
@@ -121,16 +125,16 @@ public:
     void handle_video(int32_t chat_id, td::td_api::messageVideo* video);
     void handle_document(int32_t chat_id, td::td_api::messageDocument* document);
     
-    void handle_file_update(td::td_api::object_ptr<td::td_api::file> file);
-    void handle_download_response(int32_t file_id, td::td_api::object_ptr<td::td_api::Object> response);
+    void handle_file_update(td::td_api::object_ptr<td::td_api::file>&& file);
+    void handle_download_response(int32_t file_id, td::td_api::object_ptr<td::td_api::Object>&& response);
     
     // Manejo de errores
     void handle_error(td::td_api::error* error);
     
     // Sistema de queries
     void send_query(
-        td::td_api::object_ptr<td::td_api::Function> query,
-        std::function<void(td::td_api::object_ptr<td::td_api::Object>)> handler);
+        td::td_api::object_ptr<td::td_api::Function>&& query,
+        std::function<void(td::td_api::object_ptr<td::td_api::Object>)>&& handler);
 };
 
 #endif // TELEGRAM_BOT_H

@@ -9,9 +9,6 @@
 #include <functional>
 #include <cmath>
 
-std::unordered_map<int32_t, int32_t> last_downloaded_;
-std::unordered_map<int32_t, std::chrono::steady_clock::time_point> last_time_;
-std::unordered_map<int32_t, int> last_progress_reported_;
 
 /**
  * @brief Constructor de la clase
@@ -132,8 +129,6 @@ void TelegramBot::run() {
     
     // FORZAR el inicio enviando parámetros inmediatamente
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    rzLog(RZ_LOG_INFO, "[BOT] Enviando parámetros iniciales...");
-    send_tdlib_parameters();
 }
 
 /**
@@ -216,7 +211,7 @@ void TelegramBot::main_loop() {
  * @brief Handler para la actualización de archivos durante la descarga de estos.
  * @param file Archivo que se actualiza.
  */
-void TelegramBot::handle_file_update(td::td_api::object_ptr<td::td_api::file> file) {
+void TelegramBot::handle_file_update(td::td_api::object_ptr<td::td_api::file>&& file) {
     
     int32_t file_id = file->id_;
     int64_t downloaded = file->local_->downloaded_size_;
@@ -393,18 +388,30 @@ void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td:
     rzLog(RZ_LOG_DEBUG_EXTRA, "[PROCESS] Procesando respuesta tipo: %d", response_id);
 
     switch (response_id) {
-        case td::td_api::updateAuthorizationState::ID: {
+        case td::td_api::updateOption::ID:
+        {
+            break; //Simplemente para que entre aqui
+        }
+        case td::td_api::updateAuthorizationState::ID: 
+        {
             rzLog(RZ_LOG_INFO, "[PROCESS] -> updateAuthorizationState");
             auto update = td::td_api::move_object_as<td::td_api::updateAuthorizationState>(std::move(response));
             authorization_state_ = std::move(update->authorization_state_);
             handle_authorization_update();
             break;
         }
-        
-        case td::td_api::updateNewMessage::ID: {
-            rzLog(RZ_LOG_INFO, "[PROCESS] -> updateNewMessage ¡MENSAJE RECIBIDO!");
+        case td::td_api::updateConnectionState::ID:
+        {
+            break;//Simplemente para que entre aqui
+        }
+        case td::td_api::updateNewMessage::ID: 
+        {
             auto update = td::td_api::move_object_as<td::td_api::updateNewMessage>(std::move(response));
             
+            if(update->message_->date_ < bot_start_time_)
+            break; //No procesamos mensajes anteriores a la inicializacion del bot
+            
+            rzLog(RZ_LOG_INFO, "[PROCESS] -> updateNewMessage ¡MENSAJE RECIBIDO!");
             // Guardar valores ANTES de mover update->message_
             int64_t chat_id = update->message_->chat_id_;
             int64_t user_id = get_sender_user_id(update->message_->sender_id_.get());
@@ -421,18 +428,21 @@ void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td:
             rzLog(RZ_LOG_DEBUG, "after move update->message_=%p", (void*)update->message_.get());
             break;
         }
-        case td::td_api::file::ID: {
+        case td::td_api::file::ID: 
+        {
             rzLog(RZ_LOG_INFO, "[PROCESS] -> file RECIBIDO!");
             break;
         }
-        case td::td_api::updateMessageEdited::ID: {
+        case td::td_api::updateMessageEdited::ID: 
+        {
             rzLog(RZ_LOG_INFO, "[PROCESS] -> updateMessageEdited");
             auto update = td::td_api::move_object_as<td::td_api::updateMessageEdited>(std::move(response));
             // Ignorar ediciones por ahora
             break;
         }
         
-        case td::td_api::updateNewCallbackQuery::ID: {
+        case td::td_api::updateNewCallbackQuery::ID: 
+        {
             auto update = td::td_api::move_object_as<td::td_api::updateNewCallbackQuery>(std::move(response));
             
             if (!is_message_allowed(update->sender_user_id_)) {
@@ -445,7 +455,8 @@ void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td:
             break;
         }
         
-        case td::td_api::updateNewInlineQuery::ID: {
+        case td::td_api::updateNewInlineQuery::ID: 
+        {
             auto update = td::td_api::move_object_as<td::td_api::updateNewInlineQuery>(std::move(response));
             
             if (!is_message_allowed(update->sender_user_id_)) {
@@ -458,7 +469,8 @@ void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td:
             break;
         }
         
-        case td::td_api::updateNewChosenInlineResult::ID: {
+        case td::td_api::updateNewChosenInlineResult::ID: 
+        {
             auto update = td::td_api::move_object_as<td::td_api::updateNewChosenInlineResult>(std::move(response));
             
             if (!is_message_allowed(update->sender_user_id_)) {
@@ -469,27 +481,31 @@ void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td:
             break;
         }
         
-        case td::td_api::updateMessageContent::ID: {
+        case td::td_api::updateMessageContent::ID: 
+        {
             rzLog(RZ_LOG_INFO, "[PROCESS] -> updateMessageContent");
             auto update = td::td_api::move_object_as<td::td_api::updateMessageContent>(std::move(response));
             // Ignorar por ahora
             break;
         }
         
-        case td::td_api::error::ID: {
+        case td::td_api::error::ID: 
+        {
             rzLog(RZ_LOG_INFO, "[PROCESS] -> error");
             auto error = td::td_api::move_object_as<td::td_api::error>(std::move(response));
             handle_error(error.get());
             break;
         }
         
-        case td::td_api::updateFile::ID: {
+        case td::td_api::updateFile::ID: 
+        {
             auto update = td::td_api::move_object_as<td::td_api::updateFile>(std::move(response));
             handle_file_update(std::move(update->file_));
             break;
         }
         
-        case td::td_api::updateMessageSendSucceeded::ID: {
+        case td::td_api::updateMessageSendSucceeded::ID: 
+        {
             rzLog(RZ_LOG_INFO, "[PROCESS] -> updateMessageSendSucceeded");
             auto update = td::td_api::move_object_as<td::td_api::updateMessageSendSucceeded>(std::move(response));
             
@@ -511,7 +527,7 @@ void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td:
         
         case td::td_api::ok::ID: {
             rzLog(RZ_LOG_DEBUG, "[PROCESS] -> ok");
-            // No hacer nada, solo confirma que la operación fue exitosa
+            // No hacer nada, solo confirmar
             break;
         }
         
@@ -537,7 +553,8 @@ void TelegramBot::process_response(uint64_t query_id, td::td_api::object_ptr<td:
  * Controla las transiciones necesarias para completar la autenticación.
  */
 void TelegramBot::handle_authorization_update() {
-    if (!authorization_state_) {
+    if (!authorization_state_) 
+    {
         rzLog(RZ_LOG_INFO, "[AUTH] Estado de autorización null");
         return;
     }
@@ -545,28 +562,33 @@ void TelegramBot::handle_authorization_update() {
     int auth_state_id = authorization_state_->get_id();
     rzLog(RZ_LOG_INFO, "[AUTH] Estado de autorización: %d", auth_state_id);
     
-    if (auth_state_id == td::td_api::authorizationStateWaitTdlibParameters::ID) {
+    if (auth_state_id == td::td_api::authorizationStateWaitTdlibParameters::ID) 
+    {
         rzLog(RZ_LOG_INFO, "[AUTH] -> Configurando parámetros TDLib...");
-        send_tdlib_parameters();
     }
-    else if (auth_state_id == td::td_api::authorizationStateWaitPhoneNumber::ID) {
-        rzLog(RZ_LOG_INFO, "[AUTH] -> Enviando token de bot...");
+    else if (auth_state_id == td::td_api::authorizationStateWaitPhoneNumber::ID) 
+    {
+        rzLog(RZ_LOG_INFO, "[AUTH] -> Enviando BOT_TOKEN...");
         send_bot_token();
     }
-    else if (auth_state_id == td::td_api::authorizationStateReady::ID) {
+    else if (auth_state_id == td::td_api::authorizationStateReady::ID) 
+    {
         are_authorized_ = true;
         rzLog(RZ_LOG_INFO, "[AUTH] -> ¡¡¡BOT AUTORIZADO Y LISTO!!!");
     }
-    else if (auth_state_id == td::td_api::authorizationStateClosed::ID) {
+    else if (auth_state_id == td::td_api::authorizationStateClosed::ID) 
+    {
         rzLog(RZ_LOG_INFO, "[AUTH] -> Conexión cerrada, programando reinicio");
         are_authorized_ = false;
         need_restart_ = true;
     }
-    else if (auth_state_id == td::td_api::authorizationStateLoggingOut::ID) {
+    else if (auth_state_id == td::td_api::authorizationStateLoggingOut::ID) 
+    {
         rzLog(RZ_LOG_INFO, "[AUTH] -> Cerrando sesión...");
         are_authorized_ = false;
     }
-    else {
+    else 
+    {
         rzLog(RZ_LOG_INFO, "[AUTH] -> Estado desconocido: %d", auth_state_id);
     }
 }
@@ -577,7 +599,8 @@ void TelegramBot::handle_authorization_update() {
  * Incluye los valores como API ID, API hash, base de datos local, y otras opciones
  * necesarias para inicializar correctamente la instancia de TDLib.
  */
-void TelegramBot::send_tdlib_parameters() {
+void TelegramBot::send_tdlib_parameters() 
+{
     rzLog(RZ_LOG_INFO, "[PARAMS] Creando parámetros TDLib...");
     
     auto query = td::td_api::make_object<td::td_api::setTdlibParameters>();
@@ -604,7 +627,8 @@ void TelegramBot::send_tdlib_parameters() {
 /**
  * @brief Envía el token del bot a TDLib para completar la autenticación.
  */
-void TelegramBot::send_bot_token() {
+void TelegramBot::send_bot_token() 
+{
     rzLog(RZ_LOG_INFO, "[TOKEN] Enviando token de autenticación...");
     
     auto auth = td::td_api::make_object<td::td_api::checkAuthenticationBotToken>();
@@ -621,14 +645,18 @@ void TelegramBot::send_bot_token() {
  * @param file_id Identificador del archivo descargado.
  * @param response Objeto de respuesta devuelto por TDLib que contiene el resultado de la operacion de descarga.
  */
-void TelegramBot::handle_download_response(int32_t file_id, td::td_api::object_ptr<td::td_api::Object> response) {
-    if (response->get_id() == td::td_api::file::ID) {
+void TelegramBot::handle_download_response(int32_t file_id, td::td_api::object_ptr<td::td_api::Object>&& response) 
+{
+    if (response->get_id() == td::td_api::file::ID) 
+    {
         auto file = td::move_tl_object_as<td::td_api::file>(response);
         rzLog(RZ_LOG_INFO, "[DESCARGA] Archivo %d descargado en: %s", file_id, file->local_->path_.c_str());
-    } else if (response->get_id() == td::td_api::error::ID) {
+    } else if (response->get_id() == td::td_api::error::ID) 
+    {
         auto err = td::move_tl_object_as<td::td_api::error>(response);
         rzLog(RZ_LOG_ERROR, "[DESCARGA] Error al descargar archivo %d: %s", file_id, err->message_.c_str());
-    } else {
+    } else 
+    {
         rzLog(RZ_LOG_WARN, "[DESCARGA] Respuesta inesperada (%d) al descargar archivo %d", response->get_id(), file_id);
     }
 }
@@ -638,7 +666,8 @@ void TelegramBot::handle_download_response(int32_t file_id, td::td_api::object_p
  * @brief Inicia la descarga de un archivo especificado.
  * @param file_id Identificador del archivo a descargar.
  */
-void TelegramBot::start_file_download(int32_t file_id) {
+void TelegramBot::start_file_download(int32_t file_id) 
+{
     auto download = td::td_api::make_object<td::td_api::downloadFile>();
     download->file_id_ = file_id;
     download->priority_ = 32;  // Prioridad alta (1-32, 32 = máxima)
@@ -659,10 +688,12 @@ void TelegramBot::start_file_download(int32_t file_id) {
     {
         rzLog(RZ_LOG_DEBUG, "Callback ejecutado para archivo %d, message_id: %ld", file_id, msg_id);
         
-        if(msg_id != -1) {
+        if(msg_id != -1) 
+        {
             downloads_[file_id].message_id = msg_id;
             rzLog(RZ_LOG_INFO, "Message ID actualizado para archivo %d: %ld", file_id, msg_id);
-        } else {
+        } else 
+        {
             rzLog(RZ_LOG_ERROR, "Message ID invalido recibido para archivo %d", file_id);
         }
     });
@@ -681,7 +712,8 @@ void TelegramBot::start_file_download(int32_t file_id) {
  * Se encarga de analizar el contenido.
  * @param message Objeto del mensaje recibido desde TDLib.
  */
-void TelegramBot::handle_new_updateNewMessage(td::td_api::object_ptr<td::td_api::message> message) {
+void TelegramBot::handle_new_updateNewMessage(td::td_api::object_ptr<td::td_api::message>&& message) 
+{
     //TODO AUTENTICADOR Y FILTRAR POR TIPO DE ARCHIVO
     if (!message) {
        rzLog(RZ_LOG_INFO, "[MSG] Mensaje null recibido");
@@ -692,9 +724,6 @@ void TelegramBot::handle_new_updateNewMessage(td::td_api::object_ptr<td::td_api:
         rzLog(RZ_LOG_INFO, "[MSG] Contenido del mensaje null");
         return;
     }
-
-    if(message->date_ < bot_start_time_)
-        return; //No procesamos mensajes anteriores a la inicializacion del bot
 
     int64_t chat_id = message->chat_id_;
     int64_t message_id = message->id_;
@@ -750,7 +779,8 @@ void TelegramBot::handle_document(int32_t chat_id, td::td_api::messageDocument* 
     file.fileSize = size_bytes;
     file.mimeType = mime_type;
 
-    downloads_[file_id] = DownloadInfo{
+    downloads_[file_id] = DownloadInfo
+    {
         chat_id,
         -1, //No inicializado,
         "",
@@ -886,47 +916,47 @@ std::string TelegramBot::extract_updateNewMessage_data(int64_t chat_id, td::td_a
 
     switch (content_type)
     {
-    case td::td_api::messageText::ID:
-        {
-            td::td_api::messageText* text_message = static_cast<td::td_api::messageText*>(content);
-            if (text_message->text_)
+        case td::td_api::messageText::ID:
             {
-                std::string result = text_message->text_->text_;
-                rzLog(RZ_LOG_DEBUG_EXTRA,"[EXTRACT] Texto extraído: '%s'", result.c_str());
-                
-                std::string response = generate_response(result);
-                rzLog(RZ_LOG_DEBUG_EXTRA, "[MSG] Respuesta generada: '%s'", response.c_str());
-                
-                send_text_message(chat_id, response, 
-                [](int64_t msg_id)
+                td::td_api::messageText* text_message = static_cast<td::td_api::messageText*>(content);
+                if (text_message->text_)
                 {
-                    if(msg_id != -1)
-                        rzLog(RZ_LOG_DEBUG_EXTRA, "MSG ID: %d", msg_id);
-                });
+                    std::string result = text_message->text_->text_;
+                    rzLog(RZ_LOG_DEBUG_EXTRA,"[EXTRACT] Texto extraído: '%s'", result.c_str());
+                    
+                    std::string response = generate_response(result);
+                    rzLog(RZ_LOG_DEBUG_EXTRA, "[MSG] Respuesta generada: '%s'", response.c_str());
+                    
+                    send_text_message(chat_id, response, 
+                    [](int64_t msg_id)
+                    {
+                        if(msg_id != -1)
+                            rzLog(RZ_LOG_DEBUG_EXTRA, "MSG ID: %d", msg_id);
+                    });
+                }
+                break;
             }
+        case td::td_api::messageVideo::ID:
+            {
+                td::td_api::messageVideo* video = static_cast<td::td_api::messageVideo*>(content);
+                handle_video(chat_id, video);
+                return null_str;
+                break;
+            }
+        case td::td_api::messagePhoto::ID:
+            {
+                //td::td_api::messagePhoto* photo = static_cast<td::td_api::messagePhoto*>(content);
+                break;
+            }
+        case td::td_api::messageDocument::ID:
+            {
+                td::td_api::messageDocument* document = static_cast<td::td_api::messageDocument*>(content);
+                handle_document(chat_id, document);
+                break;
+            }
+        default:
+            rzLog(RZ_LOG_WARN,"[EXTRACT] No se pudo extraer DEFAULT");
             break;
-        }
-    case td::td_api::messageVideo::ID:
-        {
-            td::td_api::messageVideo* video = static_cast<td::td_api::messageVideo*>(content);
-            handle_video(chat_id, video);
-            return null_str;
-            break;
-        }
-    case td::td_api::messagePhoto::ID:
-        {
-            //td::td_api::messagePhoto* photo = static_cast<td::td_api::messagePhoto*>(content);
-            break;
-        }
-    case td::td_api::messageDocument::ID:
-        {
-            td::td_api::messageDocument* document = static_cast<td::td_api::messageDocument*>(content);
-            handle_document(chat_id, document);
-            break;
-        }
-    default:
-        rzLog(RZ_LOG_WARN,"[EXTRACT] No se pudo extraer DEFAULT");
-        break;
     }
     
     return "";
@@ -1094,8 +1124,8 @@ void TelegramBot::handle_error(td::td_api::error* error) {
  * @param handler Función callback que recibe la respuesta de TDLib.
  */
 void TelegramBot::send_query(
-    td::td_api::object_ptr<td::td_api::Function> query,
-    std::function<void(td::td_api::object_ptr<td::td_api::Object>)> handler) {
+    td::td_api::object_ptr<td::td_api::Function>&& query,
+    std::function<void(td::td_api::object_ptr<td::td_api::Object>)>&& handler) {
     
     if (!client_manager_ || !query) {
         rzLog(RZ_LOG_ERROR, "send_query: client_manager o query null");
